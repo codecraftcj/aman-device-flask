@@ -4,14 +4,17 @@ import json
 import threading
 import socket
 from flask import Flask, request, jsonify
-
+import time
 # Configuration
 SERIAL_PORT = "COM4"  # Change based on your system (e.g., "/dev/ttyUSB0" for Linux)
 BAUD_RATE = 9600
 CLOUD_API_URL = "https://amanrest-925084270691.asia-east2.run.app/set_water_parameters"
 LOCAL_API_URL = "http://localhost:8080/set_water_parameters"  # Terminal endpoint
 DEVICE_ID = "EMULATOR-001"  # Static ID for the emulator
-TERMINAL_API_URL = "http://localhost:8080"
+
+hostname = "DESKTOP-FB8D1SN" # Get the device hostname
+
+TERMINAL_API_URL = f"http://{hostname}.local:8080" 
 app = Flask(__name__)
 
 class DeviceEmulator:
@@ -96,7 +99,9 @@ class DeviceEmulator:
 
     def start(self):
         """Starts the serial reading thread."""
-        self.announce_to_terminal()
+        response_status_code = self.announce_to_terminal()
+        while(response_status_code != 200):
+            response_status_code = self.announce_to_terminal()
         self.connect_serial()
         thread = threading.Thread(target=self.read_serial_data, daemon=True)
         thread.start()
@@ -134,11 +139,13 @@ class DeviceEmulator:
 
             if response.status_code == 200:
                 print(f"✅ Announced to terminal: {payload}")
+                
             else:
                 print(f"⚠️ Failed to announce. HTTP {response.status_code}: {response.text}")
-
+            return response.status_code
         except requests.RequestException as e:
             print(f"❌ Error announcing to terminal: {e}")
+            return "Failed"
 
 # Initialize the emulator
 device = DeviceEmulator(SERIAL_PORT, BAUD_RATE, CLOUD_API_URL, LOCAL_API_URL, DEVICE_ID, TERMINAL_API_URL)
@@ -158,6 +165,9 @@ def get_device_info():
     """Returns device information including its static ID."""
     return jsonify({"device_id": device.device_id, "status": "running" if device.running else "stopped"})
 
+@app.route('/')
+def home():
+    return("HELLO THIS IS THE AMAN DEVICE")
 if __name__ == "__main__":
     try:
         app.run(host="0.0.0.0", port=8082, debug=True)
