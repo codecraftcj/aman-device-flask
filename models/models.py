@@ -1,43 +1,29 @@
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Float, ForeignKey, LargeBinary
+from sqlalchemy.orm import relationship
+from repository.database import Base
 import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 
-class DeviceJob:
-    """Represents a job assigned to a device."""
-    def __init__(self, id, command, status="pending", created_at=None):
-        self.id = id
-        self.command = command
+# --- Job Queue Model ---
+class JobQueue(Base):
+    __tablename__ = 'job_queue'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    device_id = Column(String(255), nullable=False)
+
+    task_name = Column(String(100), nullable=False)  # Task type
+    status = Column(String(50), default='pending')  # pending, in-progress, completed, failed
+
+    issued_at = Column(DateTime, default=datetime.datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    issued_by = Column(Integer, nullable=True)  # User ID who issued the task
+
+
+    def __init__(self, device_id, task_name, status="pending"):
+        self.device_id = device_id
+        self.task_name = task_name
         self.status = status
-        self.created_at = created_at if created_at else datetime.datetime.utcnow()
-
-    def to_dict(self):
-        """Convert object to dictionary format."""
-        return {
-            "id": self.id,
-            "command": self.command,
-            "status": self.status,
-            "created_at": self.created_at
-        }
 
     def __repr__(self):
-        return f"<DeviceJob id={self.id}, command={self.command}, status={self.status}>"
-
-class FeederSchedule:
-    """Represents a scheduled feeding operation."""
-    def __init__(self, id, schedule_time, feed_amount, status="scheduled", created_at=None):
-        self.id = id
-        self.schedule_time = schedule_time
-        self.feed_amount = feed_amount
-        self.status = status
-        self.created_at = created_at if created_at else datetime.datetime.utcnow()
-
-    def to_dict(self):
-        """Convert object to dictionary format."""
-        return {
-            "id": self.id,
-            "schedule_time": self.schedule_time,
-            "feed_amount": self.feed_amount,
-            "status": self.status,
-            "created_at": self.created_at
-        }
-
-    def __repr__(self):
-        return f"<FeederSchedule id={self.id}, schedule_time={self.schedule_time}, feed_amount={self.feed_amount}, status={self.status}>"
+        return f"<JobQueue(id={self.id}, device_id={self.device_id}, task={self.task_name}, status={self.status})>"

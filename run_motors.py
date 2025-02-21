@@ -4,11 +4,11 @@ import requests
 import json
 
 # Set up serial communication with Arduino
-ser = serial.Serial('COM3', 9600, timeout=1)
+ser = serial.Serial('COM5', 9600, timeout=1)
 
 time.sleep(2)  # Wait for the serial connection to initialize
 
-API_ENDPOINT = "https://amanrest-925084270691.asia-east2.run.app"  # Replace with your actual API endpoint
+API_ENDPOINT = "https//localhost" 
 
 # Function to get jobs from the queue
 def get_job():
