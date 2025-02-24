@@ -5,14 +5,16 @@ import threading
 import socket
 import time
 import random
-from flask import Flask, request, jsonify
+import serial.tools.list_ports
+from flask import Flask, request, jsonify, Response
 from sqlalchemy.orm import sessionmaker
 from repository.database import db_session, init_db
 from models.models import JobQueue
-
+import cv2
+import os
 # Configuration
-SERIAL_PORT_1 = "COM4"  # First Arduino (receiving data)
-SERIAL_PORT_2 = "COM5"  # Second Arduino (controlling actuators)
+SERIAL_PORT_1 = "/dev/ttyACM1"  # First Arduino (receiving data)
+SERIAL_PORT_2 = "/dev/ttyACM0"  # Second Arduino (controlling actuators)
 BAUD_RATE = 9600
 DEVICE_ID = "EMULATOR-001"  # Static ID for the emulator
 TESTING = True  # Set this to True to enable testing mode
@@ -21,6 +23,80 @@ hostname = "simplegon-desktop"  # Get the device hostname
 TERMINAL_API_URL = f"http://{hostname}.local:8080"
 LOCAL_API_URL = "http://localhost:8082"
 app = Flask(__name__)
+
+# ========== CAMERA DETECTION ==========
+def get_first_available_camera():
+    """Find the first available camera on Ubuntu using v4l2."""
+    try:
+        output = os.popen("v4l2-ctl --list-devices").read()
+        print(output)
+        target_camera_section = output.split("HD Pro Webcam C920")[-1]
+        lines = target_camera_section.split("\n")
+        
+        video_devices = [line.strip() for line in lines if "/dev/video" in line]
+       
+        if video_devices:
+            print("VIDEO DEVICES")
+            print(video_devices[0])
+            return video_devices[0]  # Return first available camera device
+    except Exception as e:
+        print(f"❌ Error finding camera: {e}")
+
+    return "/dev/video0"  # Fallback to /dev/video0
+
+camera_device = get_first_available_camera()
+print(f"FOUND CAMERA AT : {camera_device}")
+camera = cv2.VideoCapture(camera_device)
+if camera.isOpened():
+    camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    camera.set(cv2.CAP_PROP_FPS, 30)
+    print(f"🎥 Using camera device: {camera_device}")
+else:
+    camera = None
+    print("❌ No camera found!")
+
+def generate_frames():
+    """Continuously capture frames from the camera."""
+    while camera and camera.isOpened():
+        success, frame = camera.read()
+        if not success:
+            break
+        else:
+            _, buffer = cv2.imencode('.jpg', frame)
+            frame = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+
+# ========== SERIAL DEVICE DETECTION ==========
+def identify_arduino_ports():
+    """Identify which serial port belongs to Uno R3 (actuators) and which to ATmega (sensors)."""
+    ports = serial.tools.list_ports.comports()
+    uno_port, atmega_port = None, None
+
+    for port in ports:
+        device_name = port.device
+        vid_pid = (port.vid, port.pid)
+
+        # Arduino Uno R3 (Common VID:PID pairs)
+        if vid_pid in [(0x2341, 0x0043), (0x2341, 0x0001), (0x2A03, 0x0043)]:
+            uno_port = device_name
+            print(f"✅ Found Arduino Uno R3 (Actuators) at {uno_port}")
+
+        # ATmega-based Arduino (Common VID:PID pairs)
+        elif vid_pid in [(0x2341, 0x003F), (0x2341, 0x0036), (0x1A86, 0x7523)]:
+            atmega_port = device_name
+            print(f"✅ Found ATmega Arduino (Sensors) at {atmega_port}")
+
+    return uno_port, atmega_port
+
+if(TESTING == False):
+    SERIAL_PORT_2, SERIAL_PORT_1 = identify_arduino_ports()  # Uno R3 (Actuators) → SERIAL_PORT_2, ATmega (Sensors) → SERIAL_PORT_1
+
+if SERIAL_PORT_1 is None or SERIAL_PORT_2 is None:
+    print("⚠️ Warning: Could not identify both Arduino devices!")
+
+
 
 class DeviceEmulator:
     def __init__(self, serial_port_1, serial_port_2, baud_rate, device_id, terminal_api_url, testing=False):
@@ -34,7 +110,7 @@ class DeviceEmulator:
         self.serial_conn_2 = None
         self.running = False
         self.is_registered=False
-        self.local_ip = self.get_local_ip()
+        self.device_hostname = self.get_device_hostname()
         self.stop_event = threading.Event()
         self.handle_jobs_thread = None
         self.read_serial_data_thread = None
@@ -75,7 +151,7 @@ class DeviceEmulator:
                 }
                 print(f"📥 [TEST MODE] Generated: {sensor_data}")
                 self.forward_to_local_api(sensor_data)
-                time.sleep(1)
+                time.sleep(1.5)
             else:
                 try:
                     if self.serial_conn_1 and self.serial_conn_1.in_waiting > 0:
@@ -83,13 +159,21 @@ class DeviceEmulator:
                         print(f"📥 Received: {raw_line}")
                         
                         try:
-                            sensor_data = json.loads(raw_line)
-                            sensor_data["device_id"] = self.device_id  # Attach device ID
+                            raw_json = json.loads(raw_line)
+                            sensor_data = {
+                                "device_id": self.device_id,
+                                "temperature": raw_json["temperature"],
+                                "turbidity": raw_json["turbidity"],
+                                "ph_level":  raw_json["ph_level"],
+                                "hydrogen_sulfide_level": raw_json["hydrogen_sulfide_level"]
+                            }
+
                             self.forward_to_local_api(sensor_data)
                         except json.JSONDecodeError:
                             print(f"❌ Error: Invalid JSON from serial - {raw_line}")
                 except Exception as e:
                     print(f"❌ Error reading serial data: {e}")
+                time.sleep(1)
 
     def forward_to_local_api(self, sensor_data):
         """Sends water parameters to the device terminal at `http://{self.terminal_api_url}:8080/set_water_parameters`."""
@@ -99,6 +183,7 @@ class DeviceEmulator:
 
             if response.status_code == 200 or response.status_code == 201:
                 print(f"✅ Sent data to device terminal: {sensor_data} - Response: {response.json()}")
+                time.sleep(5)
             else:
                 print(f"⚠️ Failed to send data to terminal. HTTP {response.status_code}: {response.text}")
         except requests.RequestException as e:
@@ -121,10 +206,12 @@ class DeviceEmulator:
                 if self.testing:
                     print(f"🛠️ [TEST MODE] Job executed: {job.task_name}")
                 else:
-                    if job.task_name == "extend_motors":
-                        self.serial_conn_2.write(b'o')
-                    elif job.task_name == "retract_motors":
-                        self.serial_conn_2.write(b'c')
+                    if job.task_name == "small open":
+                        self.serial_conn_2.write(b's')
+                    elif job.task_name == "half open":
+                        self.serial_conn_2.write(b'm')
+                    elif job.task_name == "large open":
+                        self.serial_conn_2.write(b'l')
                 job.status = "completed"
                 time.sleep(1.5)
                 session.commit()
@@ -168,14 +255,12 @@ class DeviceEmulator:
             self.serial_conn_2.close()
         print("🚪 Serial connections closed.")
 
-    def get_local_ip(self):
+    def get_device_hostname(self):
         """Get the local IP address of the device."""
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))  # Connect to external server
-            local_ip = s.getsockname()[0]
-            s.close()
-            return local_ip
+            device_hostname = socket.gethostname()
+            
+            return device_hostname
         except Exception as e:
             print(f"❌ Error getting local IP: {e}")
             return "127.0.0.1"
@@ -184,9 +269,10 @@ class DeviceEmulator:
         """Announces the device to the terminal as available."""
         try:
             url = f"{self.terminal_api_url}/register_device"
+            print("API TERMINAL URL"+ self.terminal_api_url)
             payload = {
                 "device_id": self.device_id,
-                "local_ip": self.local_ip,
+                "device_hostname": self.device_hostname,
                 "status": "available"
             }
             headers = {'Content-Type': 'application/json'}
@@ -224,6 +310,7 @@ def unregister_device():
 def send_command():
     """API endpoint for the terminal to send commands to the emulator."""
     data = request.json
+    print(data)
     if not data:
         return jsonify({"error": "Invalid request, JSON required"}), 400
     response = device.send_command(data)
@@ -254,9 +341,36 @@ def get_jobs():
         return jsonify(serialized_jobs), 200
     except Exception as e:
         return jsonify({"error": str(e)}), 500
-if __name__ == "__main__":
+
+
+@app.route("/update-job/<int:job_id>", methods=["PUT"])
+def update_job(job_id):
     try:
-        app.run(host="0.0.0.0", port=8082, debug=True)
-    except KeyboardInterrupt:
-        device.stop()
-        print("Shutting down...")
+        data = request.get_json()
+        job = db_session.query(JobQueue).filter(JobQueue.id == job_id).first()
+
+        if job is None:
+            return jsonify({"message": "Job not found"}), 404
+
+        if "job_name" in data:
+            job.job_name = data['job_name']
+        if "status" in data:
+            job.status = data['status']
+
+        db_session.commit()
+        return jsonify({"message": "Job updated successfully"}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+        
+@app.route('/camera')
+def video_feed():
+    """Stream the camera feed as an MJPEG stream."""
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+if __name__ == "__main__":
+
+    app.run(host="0.0.0.0", port=8082, debug=False)
+

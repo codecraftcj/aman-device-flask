@@ -3,7 +3,7 @@ import requests
 import json
 
 # Configuration
-SERIAL_PORT = "COM4"  # Replace with your Arduino's COM port (e.g., "COM3" for Windows, "/dev/ttyUSB0" for Linux)
+SERIAL_PORT = "/dev/ttyACM0"  # Replace with your Arduino's COM port (e.g., "COM3" for Windows, "/dev/ttyUSB0" for Linux)
 BAUD_RATE = 9600      # Must match the Arduino Serial.begin() baud rate
 API_URL = "https://amanrest-925084270691.asia-east2.run.app/set_water_parameters"
 

@@ -2,22 +2,31 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base
 import os
 
-db_type = "sqlite"  # Change to "postgresql" for PostgreSQL
+# PostgreSQL Connection Parameters
+user = os.environ["DB_USER"]
+password = os.environ["DB_PASSWORD"]
+host = os.environ["DB_HOST"]
+port = os.environ["DB_PORT"]
+database = os.environ["DB_DB"]
 
+connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
-if db_type == "sqlite":
-    database_path = "sqlite_dev.db"  # Change as needed
-    connection_str = f"sqlite:///{database_path}"
-else:
-    user = os.environ["DB_USER"]
-    password = os.environ["DB_PASSWORD"]
-    host = os.environ["DB_HOST"]
-    port = os.environ["DB_PORT"]
-    database = os.environ["DB_DB"]
-    connection_str = f"postgresql://{user}:{password}@{host}:{port}/{database}"
+# Connection Pooling Settings
+connect_args = {}  # PostgreSQL requires no special connect args
+pool_size = 10  # Increase this if needed (default: 5)
+max_overflow = 20  # How many extra connections can be created (default: 10)
+pool_timeout = 30  # Seconds before timing out
+pool_recycle = 1800  # Recycle connections every 30 minutes
 
-# SQLAlchemy engine
-engine = create_engine(connection_str, connect_args={"check_same_thread": False} if db_type == "sqlite" else {})
+# SQLAlchemy Engine with Connection Pooling
+engine = create_engine(
+    connection_str,
+    connect_args=connect_args,
+    pool_size=pool_size,
+    max_overflow=max_overflow,
+    pool_timeout=pool_timeout,
+    pool_recycle=pool_recycle,
+)
 
 db_session = scoped_session(sessionmaker(autocommit=False,
                                          autoflush=False,
@@ -30,6 +39,6 @@ def init_db():
     """
     Initialize the database by creating all defined tables.
     """
-    # Import all models to ensure they are registered
+    # Import all models to ensure they are registered before table creation
     # Example: from yourapplication.models import SomeModel
     Base.metadata.create_all(bind=engine)

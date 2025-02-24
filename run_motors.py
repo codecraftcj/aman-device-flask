@@ -4,20 +4,23 @@ import requests
 import json
 
 # Set up serial communication with Arduino
-ser = serial.Serial('COM5', 9600, timeout=1)
+ser = serial.Serial('/dev/ttyACM2', 9600, timeout=1)
 
 time.sleep(2)  # Wait for the serial connection to initialize
 
-API_ENDPOINT = "https//localhost" 
+API_ENDPOINT = "http://0.0.0.0:8082" 
 
 # Function to get jobs from the queue
 def get_job():
+    response = requests.get(f"{API_ENDPOINT}/get-jobs")  # Assuming a GET request to fetch jobs
+    
     try:
         response = requests.get(f"{API_ENDPOINT}/get-jobs")  # Assuming a GET request to fetch jobs
         if response.status_code == 200:
             job_data = response.json()
             for job in job_data:
-                if not job['is_completed'] and job['job_name'] in ['extend_motors', 'retract_motors']:
+                if job['status'] != "completed":
+
                     return job
     except requests.exceptions.RequestException as e:
         print(f"Error fetching job: {e}")
@@ -27,7 +30,7 @@ def get_job():
 def report_job_completion(job_id, status):
     try:
         payload = {
-            "is_completed": status == "completed"
+            "status": status
         }
         headers = {'Content-Type': 'application/json'}
         response = requests.put(f"{API_ENDPOINT}/update-job/{job_id}", data=json.dumps(payload), headers=headers)  # Assuming a PUT request to report completion
@@ -43,6 +46,8 @@ print("Waiting for jobs in the queue...")
 try:
     while True:
         job = get_job()
+
+        print(job)
         if job:
             command = job['job_name']
             job_id = job['id']
