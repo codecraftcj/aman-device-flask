@@ -18,10 +18,14 @@ SERIAL_PORT_2 = "/dev/ttyACM1"  # Second Arduino (controlling actuators)
 BAUD_RATE = 9600
 DEVICE_ID = "EMULATOR-001"  # Static ID for the emulator
 TESTING = True  # Set this to True to enable testing mode
+
 hostname = "simplegon-desktop"  # Get the device hostname
 
 TERMINAL_API_URL = f"http://{hostname}.local:8080"
+if(TESTING):
+    TERMINAL_API_URL = f"http://localhost:8080"
 LOCAL_API_URL = "http://localhost:8082"
+
 app = Flask(__name__)
 
 # ========== CAMERA DETECTION ==========
