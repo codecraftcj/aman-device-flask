@@ -13,8 +13,8 @@ from models.models import JobQueue
 import cv2
 import os
 # Configuration
-SERIAL_PORT_1 = "/dev/ttyACM1"  # First Arduino (receiving data)
-SERIAL_PORT_2 = "/dev/ttyACM0"  # Second Arduino (controlling actuators)
+SERIAL_PORT_1 = "/dev/ttyACM0"  # First Arduino (receiving data)
+SERIAL_PORT_2 = "/dev/ttyACM1"  # Second Arduino (controlling actuators)
 BAUD_RATE = 9600
 DEVICE_ID = "EMULATOR-001"  # Static ID for the emulator
 TESTING = True  # Set this to True to enable testing mode
@@ -47,6 +47,7 @@ def get_first_available_camera():
 camera_device = get_first_available_camera()
 print(f"FOUND CAMERA AT : {camera_device}")
 camera = cv2.VideoCapture(camera_device)
+print(camera.isOpened())
 if camera.isOpened():
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
@@ -75,26 +76,34 @@ def identify_arduino_ports():
     uno_port, atmega_port = None, None
 
     for port in ports:
+        print("---------")
+        print(port)
+        print(port.device)
+    
         device_name = port.device
         vid_pid = (port.vid, port.pid)
-
+        print(vid_pid)
         # Arduino Uno R3 (Common VID:PID pairs)
-        if vid_pid in [(0x2341, 0x0043), (0x2341, 0x0001), (0x2A03, 0x0043)]:
-            uno_port = device_name
-            print(f"✅ Found Arduino Uno R3 (Actuators) at {uno_port}")
+        if vid_pid in [(0x2341, 0x0043), (0x2341, 0x0001), (0x2A03, 0x0043),(0x2341,0x0042)]:
+            if(atmega_port is None):
+                atmega_port = device_name
+                print(f"✅ Found ATmega Arduino (Sensors) at {atmega_port}")
+            else:
+                uno_port = device_name
+                print(f"✅ Found Arduino Uno R3 (Actuators) at {uno_port}")
 
         # ATmega-based Arduino (Common VID:PID pairs)
         elif vid_pid in [(0x2341, 0x003F), (0x2341, 0x0036), (0x1A86, 0x7523)]:
-            atmega_port = device_name
-            print(f"✅ Found ATmega Arduino (Sensors) at {atmega_port}")
+            uno_port = device_name
+            print(f"✅ Found Arduino Uno R3 (Actuators) at {uno_port}")
 
     return uno_port, atmega_port
 
-if(TESTING == False):
-    SERIAL_PORT_2, SERIAL_PORT_1 = identify_arduino_ports()  # Uno R3 (Actuators) → SERIAL_PORT_2, ATmega (Sensors) → SERIAL_PORT_1
+# if(TESTING == False):
+#     SERIAL_PORT_1,SERIAL_PORT_2 = identify_arduino_ports()  # Uno R3 (Actuators) → SERIAL_PORT_2, ATmega (Sensors) → SERIAL_PORT_1
 
-if SERIAL_PORT_1 is None or SERIAL_PORT_2 is None:
-    print("⚠️ Warning: Could not identify both Arduino devices!")
+# if SERIAL_PORT_1 is None or SERIAL_PORT_2 is None:
+#     print("⚠️ Warning: Could not identify both Arduino devices!")
 
 
 
@@ -114,24 +123,25 @@ class DeviceEmulator:
         self.stop_event = threading.Event()
         self.handle_jobs_thread = None
         self.read_serial_data_thread = None
+        self.threads_started = False
         init_db()
         
     def connect_serial(self):
         """Establish serial connections."""
         if not self.testing:
             try:
-                self.serial_conn_1 = serial.Serial(self.serial_port_1, self.baud_rate, timeout=1)
+                self.serial_conn_1 = serial.Serial(self.serial_port_1, self.baud_rate, timeout=20)
                 print(f"✅ Connected to serial port 1: {self.serial_port_1}")
+
             except serial.SerialException as e:
                 print(f"❌ Error connecting to serial 1: {e}")
                 self.serial_conn_1 = None
 
             try:
-                self.serial_conn_2 = serial.Serial(self.serial_port_2, self.baud_rate, timeout=1)
+                self.serial_conn_2 = serial.Serial(self.serial_port_2, self.baud_rate, timeout=20)
                 print(f"✅ Connected to serial port 2: {self.serial_port_2}")
             except serial.SerialException as e:
                 print(f"❌ Error connecting to serial 2: {e}")
-                self.serial_conn_2 = None
         else:
             print("🛠️ Running in TESTING mode: No serial connections established.")
 
@@ -151,7 +161,7 @@ class DeviceEmulator:
                 }
                 print(f"📥 [TEST MODE] Generated: {sensor_data}")
                 self.forward_to_local_api(sensor_data)
-                time.sleep(1.5)
+                time.sleep(5)
             else:
                 try:
                     if self.serial_conn_1 and self.serial_conn_1.in_waiting > 0:
@@ -173,7 +183,7 @@ class DeviceEmulator:
                             print(f"❌ Error: Invalid JSON from serial - {raw_line}")
                 except Exception as e:
                     print(f"❌ Error reading serial data: {e}")
-                time.sleep(1)
+                time.sleep(30)
 
     def forward_to_local_api(self, sensor_data):
         """Sends water parameters to the device terminal at `http://{self.terminal_api_url}:8080/set_water_parameters`."""
@@ -195,56 +205,71 @@ class DeviceEmulator:
         job = JobQueue(device_id=self.device_id, task_name=task_name, status="pending")
         db_session.add(job)
         db_session.commit()
+        print({"status": "queued", "command": command})
         return {"status": "queued", "command": command}
 
     def handle_jobs(self):
         """Fetches and executes jobs from the database."""
+        print("HANDLING JOBS")
         while self.running and self.is_registered:
             session = db_session()
             jobs = session.query(JobQueue).filter_by(status="pending", device_id=self.device_id).all()
             for job in jobs:
+                print("TEST")
+                print(len(jobs))
                 if self.testing:
                     print(f"🛠️ [TEST MODE] Job executed: {job.task_name}")
                 else:
                     if job.task_name == "small open":
+                        print("SMALL OPEN HANDLED")
                         self.serial_conn_2.write(b's')
                     elif job.task_name == "half open":
+                        print("HALF OPEN HANDLED")
                         self.serial_conn_2.write(b'm')
-                    elif job.task_name == "large open":
+                    elif job.task_name == "full open":
+                        print("LARGE OPEN HANDLED")
                         self.serial_conn_2.write(b'l')
+                    print(self.serial_conn_2)
                 job.status = "completed"
-                time.sleep(1.5)
                 session.commit()
             session.close()
-            time.sleep(1)
+
             
     def start(self):
         """Starts the serial reading thread."""
         self.stop_event.clear()
-        response_status_code = self.announce_to_terminal()
+        response_status_code = 201
         while(response_status_code != 200):
             response_status_code = self.announce_to_terminal()
+            time.sleep(2)
         self.connect_serial()
         self.running = True
 
-        
-      
+    def start_threads(self):
+        self.handle_jobs_thread = threading.Thread(target=self.handle_jobs, daemon=True)
+        self.read_serial_data_thread = threading.Thread(target=self.read_serial_data, daemon=True)
+        self.handle_jobs_thread.start()
+        self.read_serial_data_thread.start()
+        self.threads_started = True
+        print("STARTING THREADS")
+    def stop_threads(self):
+        self.stop_event.set()
+        if self.handle_jobs_thread:
+            self.handle_jobs_thread.join()
+        if self.read_serial_data_thread:
+            self.read_serial_data_thread.join()
+        self.handle_jobs_thread = None
+        self.read_serial_data_thread = None
+        self.threads_started = False
+        print("STOPPING THREADS")
     def set_is_registered(self,bool):
         self.is_registered = bool
-        if(self.is_registered == True):
-            self.handle_jobs_thread = threading.Thread(target=self.handle_jobs, daemon=True)
-            self.read_serial_data_thread = threading.Thread(target=self.read_serial_data, daemon=True)
-            self.handle_jobs_thread.start()
-            self.read_serial_data_thread.start()
-        else:
-            print("STOPPING THREADS")
+        # if(self.is_registered):
+        #     self.start_threads()
+        if(self.is_registered == True and self.threads_started == False ):
+            self.start_threads()
+        elif(self.is_registered == False and self.threads_started == True):
             self.stop_event.set()
-            if self.handle_jobs_thread:
-                self.handle_jobs_thread.join()
-            if self.read_serial_data_thread:
-                self.read_serial_data_thread.join()
-            self.handle_jobs_thread = None
-            self.read_serial_data_thread = None
             
     def stop(self):
         """Stops the emulator."""
@@ -269,21 +294,19 @@ class DeviceEmulator:
         """Announces the device to the terminal as available."""
         try:
             url = f"{self.terminal_api_url}/register_device"
-            print("API TERMINAL URL"+ self.terminal_api_url)
+            
             payload = {
                 "device_id": self.device_id,
                 "device_hostname": self.device_hostname,
                 "status": "available"
             }
             headers = {'Content-Type': 'application/json'}
+            print("API TERMINAL URL"+ self.terminal_api_url)
             response = requests.post(url, json=payload, headers=headers, timeout=5)
-
+            
             if response.status_code == 200:
                 print(f"✅ Announced to terminal: {payload}")
                 data = json.loads(response.content)
-                message = data["message"]
-                if "Device is already registered in the system" in message:
-                    self.set_is_registered(True)
             else:
                 print(f"⚠️ Failed to announce. HTTP {response.status_code}: {response.text}")
             return response.status_code

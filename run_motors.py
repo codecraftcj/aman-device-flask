@@ -4,7 +4,7 @@ import requests
 import json
 
 # Set up serial communication with Arduino
-ser = serial.Serial('/dev/ttyACM2', 9600, timeout=1)
+ser = serial.Serial('/dev/ttyACM1', 9600, timeout=1)
 
 time.sleep(2)  # Wait for the serial connection to initialize
 

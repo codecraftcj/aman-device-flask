@@ -3,11 +3,16 @@ from sqlalchemy.orm import scoped_session, sessionmaker, declarative_base
 import os
 
 # PostgreSQL Connection Parameters
-user = os.environ["DB_USER"]
-password = os.environ["DB_PASSWORD"]
-host = os.environ["DB_HOST"]
-port = os.environ["DB_PORT"]
-database = os.environ["DB_DB"]
+# user = os.environ["DB_USER"]
+# password = os.environ["DB_PASSWORD"]
+# host = os.environ["DB_HOST"]
+# port = os.environ["DB_PORT"]
+# database = os.environ["DB_DB"]
+user = "aman_user" # Default to 'root'
+password ="securepassword"# Default empty (set password if configured)
+host =  "localhost" # Default to localhost
+port = "3306"  # MySQL default port
+database =  "AMAN"  # Default database (change as needed)
 
 connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
