@@ -12,7 +12,7 @@ user = "aman_user" # Default to 'root'
 password ="securepassword"# Default empty (set password if configured)
 host =  "localhost" # Default to localhost
 port = "3306"  # MySQL default port
-database =  "AMAN"  # Default database (change as needed)
+database =  "AMAN_DEVICE"  # Default database (change as needed)
 
 connection_str = f"mysql+pymysql://{user}:{password}@{host}:{port}/{database}"
 
