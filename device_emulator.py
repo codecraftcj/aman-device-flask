@@ -13,11 +13,11 @@ from models.models import JobQueue
 import cv2
 import os
 # Configuration
-SERIAL_PORT_1 = "/dev/ttyACM0"  # First Arduino (receiving data)
-SERIAL_PORT_2 = "/dev/ttyACM1"  # Second Arduino (controlling actuators)
+SERIAL_PORT_1 = "/dev/ttyACM1"  # First Arduino (receiving data)
+SERIAL_PORT_2 = "/dev/ttyACM0"  # Second Arduino (controlling actuators)
 BAUD_RATE = 9600
 DEVICE_ID = "EMULATOR-001"  # Static ID for the emulator
-TESTING = True  # Set this to True to enable testing mode
+TESTING = False  # Set this to True to enable testing mode
 
 hostname = "simplegon-desktop"  # Get the device hostname
 

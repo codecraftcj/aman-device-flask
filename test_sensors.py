@@ -1,7 +1,7 @@
 import serial
 
 # Initialize the serial connection
-serial_conn_2 = serial.Serial("/dev/ttyACM1", 9600, timeout=20)
+serial_conn_2 = serial.Serial("/dev/ttyACM0", 9600, timeout=20)
 
 def handle_input(task_name):
     """Handles input commands and sends data via serial."""
