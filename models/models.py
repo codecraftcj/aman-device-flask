@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, Float, ForeignKey, LargeBinary
+from sqlalchemy import Column, Integer, String, DateTime, Boolean, Float, ForeignKey, LargeBinary,JSON
 from sqlalchemy.orm import relationship
 from repository.database import Base
 import datetime
@@ -27,3 +27,17 @@ class JobQueue(Base):
 
     def __repr__(self):
         return f"<JobQueue(id={self.id}, device_id={self.device_id}, task={self.task_name}, status={self.status})>"
+
+# --- Feeding Schedule Model ---
+class FeedingSchedule(Base):
+    __tablename__ = 'feeding_schedule'
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    schedule = Column(JSON, nullable=False)  # JSON-based schedule
+    last_updated = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+    def __init__(self, schedule):
+        self.schedule = schedule
+
+    def __repr__(self):
+        return f"<FeedingSchedule(id={self.id}, schedule={self.schedule})>"

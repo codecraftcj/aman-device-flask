@@ -1,0 +1,16 @@
+{
+    "habit":{
+        "minute_interval":30,
+        "days":{
+            "Monday":true,
+            "Tuesday":true,
+            "Wednesday":true,
+            "Thursday":true,
+            "Friday":true,
+            "Saturday":true,
+            "Sunday":true
+        }
+    },
+    "start_time":"8:00 AM",
+    "end_time":"5:00 PM"
+}

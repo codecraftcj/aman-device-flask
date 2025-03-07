@@ -9,9 +9,11 @@ import serial.tools.list_ports
 from flask import Flask, request, jsonify, Response
 from sqlalchemy.orm import sessionmaker
 from repository.database import db_session, init_db
-from models.models import JobQueue
+from models.models import JobQueue, FeedingSchedule
 import cv2
 import os
+import schedule
+from datetime import datetime, timezone
 # Configuration
 SERIAL_PORT_1 = "/dev/ttyACM1"  # First Arduino (receiving data)
 SERIAL_PORT_2 = "/dev/ttyACM0"  # Second Arduino (controlling actuators)
@@ -109,7 +111,99 @@ def identify_arduino_ports():
 # if SERIAL_PORT_1 is None or SERIAL_PORT_2 is None:
 #     print("⚠️ Warning: Could not identify both Arduino devices!")
 
+def validate_schedule(schedule):
+    """Validate the structure of the feeding schedule."""
+    required_keys = {"habit", "start_time", "end_time"}
+    if not all(key in schedule for key in required_keys):
+        return False
 
+    habit = schedule.get("habit", {})
+    if not isinstance(habit, dict) or "minute_interval" not in habit or "days" not in habit:
+        return False
+    
+    if not isinstance(habit["minute_interval"], int) or habit["minute_interval"] <= 0:
+        return False
+    
+    days = habit.get("days", {})
+    if not isinstance(days, dict) or not all(isinstance(v, bool) for v in days.values()):
+        return False
+    
+    if not isinstance(schedule["start_time"], str) or not isinstance(schedule["end_time"], str):
+        return False
+
+    return True
+
+
+def get_current_time():
+    """Returns the current time and timezone."""
+    return datetime.now(timezone.utc).astimezone()
+
+def is_within_time_range(start_time, end_time):
+    """Check if the current time is within the feeding schedule."""
+    current_time = get_current_time().time()
+    return start_time <= current_time <= end_time
+class FeedingScheduleManager:
+    def __init__(self):
+        self.running = True
+        self.schedule_thread = threading.Thread(target=self.run_schedule_loop, daemon=True)
+        self.update_thread = threading.Thread(target=self.check_and_update_schedule, daemon=True)
+        self.schedule_thread.start()
+        self.update_thread.start()
+
+    def run_schedule_loop(self):
+        """Continuously check and run scheduled jobs."""
+        while self.running:
+            schedule.run_pending()
+            time.sleep(1)  # Reduced sleep for better real-time execution
+
+    def check_and_update_schedule(self):
+        """Fetch feeding schedule from the database and update jobs accordingly."""
+        while self.running:
+            with db_session() as session:
+                schedule_entry = session.query(FeedingSchedule).first()
+
+                if schedule_entry:
+                    schedule_data = schedule_entry.schedule
+                    if validate_schedule(schedule_data):
+                        self.update_cron_jobs(schedule_data)
+
+            time.sleep(60)  # Check for updates every minute
+
+    def update_cron_jobs(self, schedule_data):
+        """Updates the cron jobs based on the provided feeding schedule."""
+        habit = schedule_data["habit"]
+        minute_interval = habit["minute_interval"]
+        active_days = [day for day, is_active in habit["days"].items() if is_active]
+        start_time = datetime.strptime(schedule_data["start_time"], "%I:%M %p").time()
+        end_time = datetime.strptime(schedule_data["end_time"], "%I:%M %p").time()
+
+        # Clear existing jobs before rescheduling
+        schedule.clear()
+
+        current_time_info = get_current_time()
+        print(f"🕒 Current system time: {current_time_info.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+
+        for day in active_days:
+            job = schedule.every(minute_interval).minutes.do(self.trigger_feeding_job, start_time=start_time, end_time=end_time)
+            job.tag(day)
+            print(f"✅ Scheduled feeding every {minute_interval} minutes on {day} from {start_time} to {end_time} (Timezone: {current_time_info.strftime('%Z')})")
+
+    def trigger_feeding_job(self, start_time, end_time):
+        """Triggers a feeding job if within schedule."""
+        if is_within_time_range(start_time, end_time):
+            print("✅ Adding feeding job to queue")
+
+            with db_session() as session:
+                job = JobQueue(device_id=DEVICE_ID, task_name="feed_fish", status="pending")
+                session.add(job)
+                session.commit()
+            
+            print("✅ Feeding job scheduled")
+        else:
+            print("⏳ Feeding skipped, outside scheduled time range")
+
+# Start the scheduler
+feeding_manager = FeedingScheduleManager()
 
 class DeviceEmulator:
     def __init__(self, serial_port_1, serial_port_2, baud_rate, device_id, terminal_api_url, testing=False):
@@ -154,6 +248,7 @@ class DeviceEmulator:
         self.running = True
         while self.running and self.is_registered:
             if self.testing:
+            # if True:
                 # Generate dummy data every second
                 # required_fields = ['device_id', 'temperature', 'turbidity', 'ph_level', 'hydrogen_sulfide_level']
                 sensor_data = {
@@ -165,7 +260,7 @@ class DeviceEmulator:
                 }
                 print(f"📥 [TEST MODE] Generated: {sensor_data}")
                 self.forward_to_local_api(sensor_data)
-                time.sleep(5)
+                time.sleep(2)
             else:
                 try:
                     if self.serial_conn_1 and self.serial_conn_1.in_waiting > 0:
@@ -397,6 +492,66 @@ def video_feed():
     """Stream the camera feed as an MJPEG stream."""
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+@app.route('/feeding-schedule', methods=['POST'])
+def create_or_update_feeding_schedule():
+    try:
+        data = request.get_json()
+        schedule = data.get("schedule")
+
+        if not schedule or not validate_schedule(schedule):
+            return jsonify({"error": "Invalid schedule format"}), 400
+
+        feeding_schedule = db_session.query(FeedingSchedule).first()
+        
+        if feeding_schedule:
+            feeding_schedule.schedule = schedule  # Update existing schedule
+        else:
+            feeding_schedule = FeedingSchedule(schedule=schedule)
+            db_session.add(feeding_schedule)
+
+        db_session.commit()
+        return jsonify({"message": "Feeding schedule updated successfully", "schedule_id": feeding_schedule.id}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+@app.route('/feeding-schedule', methods=['GET'])
+def get_feeding_schedule():
+    try:
+        schedule = db_session.query(FeedingSchedule).first()
+        
+        if not schedule:
+            return jsonify({"message": "No schedule found"}), 404
+        
+        return jsonify({
+            "id": schedule.id,
+            "schedule": schedule.schedule,
+            "last_updated": schedule.last_updated.strftime('%Y-%m-%d %H:%M:%S')
+        }), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+
+@app.route('/feeding-schedule', methods=['DELETE'])
+def delete_feeding_schedule():
+    try:
+        schedule = db_session.query(FeedingSchedule).first()
+
+        if not schedule:
+            return jsonify({"message": "Schedule not found"}), 404
+
+        db_session.delete(schedule)
+        db_session.commit()
+        return jsonify({"message": "Feeding schedule deleted successfully"}), 200
+    except Exception as e:
+        db_session.rollback()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        db_session.close()
+        
 if __name__ == "__main__":
 
     app.run(host="0.0.0.0", port=8082, debug=False)
