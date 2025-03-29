@@ -14,6 +14,15 @@ import cv2
 import os
 import schedule
 from datetime import datetime, timezone
+
+import threading
+import sys
+import os
+
+def terminate_program():
+    print("⏳ Exiting program after 3 minutes...")
+    os._exit(0)  # Forcefully exit the script
+
 # Configuration
 SERIAL_PORT_1 = "/dev/ttyACM1"  # First Arduino (receiving data)
 SERIAL_PORT_2 = "/dev/ttyACM0"  # Second Arduino (controlling actuators)
@@ -36,7 +45,7 @@ def get_first_available_camera():
     try:
         output = os.popen("v4l2-ctl --list-devices").read()
         print(output)
-        target_camera_section = output.split("HD Pro Webcam C920")[-1]
+        target_camera_section = output.split("WebCamera")[-1]
         lines = target_camera_section.split("\n")
         
         video_devices = [line.strip() for line in lines if "/dev/video" in line]
@@ -154,6 +163,8 @@ class FeedingScheduleManager:
         """Continuously check and run scheduled jobs."""
         while self.running:
             schedule.run_pending()
+            today = datetime.today().strftime('%A')
+            # print(schedule.get_jobs(tag=today))
             time.sleep(1)  # Reduced sleep for better real-time execution
 
     def check_and_update_schedule(self):
@@ -167,7 +178,7 @@ class FeedingScheduleManager:
                     if validate_schedule(schedule_data):
                         self.update_cron_jobs(schedule_data)
 
-            time.sleep(60)  # Check for updates every minute
+            time.sleep(300)  # Check for updates every minute
 
     def update_cron_jobs(self, schedule_data):
         """Updates the cron jobs based on the provided feeding schedule."""
@@ -179,22 +190,33 @@ class FeedingScheduleManager:
 
         # Clear existing jobs before rescheduling
         schedule.clear()
-
         current_time_info = get_current_time()
         print(f"🕒 Current system time: {current_time_info.strftime('%Y-%m-%d %H:%M:%S %Z')}")
 
-        for day in active_days:
-            job = schedule.every(minute_interval).minutes.do(self.trigger_feeding_job, start_time=start_time, end_time=end_time)
-            job.tag(day)
-            print(f"✅ Scheduled feeding every {minute_interval} minutes on {day} from {start_time} to {end_time} (Timezone: {current_time_info.strftime('%Z')})")
+        #@DEMO: scheduled every 10 seconds to showcase scheduler
+        #schedule.every(10).seconds.do(self.inspect_runs)
 
+        for day in active_days:
+            today = datetime.today().strftime('%A')
+            if day == today:
+                job = schedule.every(minute_interval).minutes.do(self.trigger_feeding_job, start_time=start_time, end_time=end_time)
+                job.tag(day)
+                print(f"✅ Scheduled feeding every {minute_interval} minutes on {day} from {start_time} to {end_time} (Timezone: {current_time_info.strftime('%Z')})")
+    def inspect_runs(self):
+        print("HELLO IM RUNNING")
+        with db_session() as session:
+                job = JobQueue(device_id=DEVICE_ID, task_name="small open", status="pending")
+                session.add(job)
+                session.commit()
+            
+        print("✅ Feeding job scheduled")
     def trigger_feeding_job(self, start_time, end_time):
         """Triggers a feeding job if within schedule."""
         if is_within_time_range(start_time, end_time):
             print("✅ Adding feeding job to queue")
 
             with db_session() as session:
-                job = JobQueue(device_id=DEVICE_ID, task_name="feed_fish", status="pending")
+                job = JobQueue(device_id=DEVICE_ID, task_name="small open", status="pending")
                 session.add(job)
                 session.commit()
             
@@ -555,4 +577,7 @@ def delete_feeding_schedule():
 if __name__ == "__main__":
 
     app.run(host="0.0.0.0", port=8082, debug=False)
+    # Schedule program termination after 3 minutes (180 seconds)
+    # shutdown_timer = threading.Timer(30, terminate_program)
+    # shutdown_timer.start()
 
